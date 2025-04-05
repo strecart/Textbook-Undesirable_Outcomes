@@ -1,0 +1,198 @@
+### 15. Preprocessing NCDB data- manually encoding and imputing missing data
+
+import pandas as pd
+import numpy as np
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+import gradio as gr
+
+# Import for iterative imputation
+from sklearn.experimental import enable_iterative_imputer  # Enable experimental IterativeImputer
+from sklearn.impute import IterativeImputer
+
+
+# load data and define variables of interest
+dfncdb = pd.read_csv('ncdbdf.txt', sep='\t')
+
+variables = [
+    'AGE', 'SEX', 'RACE', 'SPANISH_HISPANIC_ORIGIN', 'RX_SUMM_SURG_PRIM_SITE',
+    'UR_CD_13', 'INSURANCE_STATUS', 'MED_INC_QUAR_2020',
+    'RX_HOSP_SURG_APPR_2010', 'CDCC_TOTAL_BEST', 'FACILITY_TYPE_CD', 'PRIMARY_SITE',
+    'HISTOLOGY', 'GRADE_MERGED',
+    'TNM_CLIN_T_FINAL', 'TNM_CLIN_N_FINAL', 'TNM_CLIN_M_FINAL', 'REGIONAL_NODES_EXAMINED',
+    'RX_SUMM_SYSTEMIC_SUR_SEQ', 'DX_LASTCONTACT_DEATH_MONTHS', 'PUF_VITAL_STATUS'
+]
+
+dfncdb1 = dfncdb[variables]
+
+# Change response values to strings for 'PUF_VITAL_STATUS'.
+dfncdb1['PUF_VITAL_STATUS'] = dfncdb1['PUF_VITAL_STATUS'].astype(object)
+dfncdb1.loc[dfncdb1['PUF_VITAL_STATUS'] == 0, 'PUF_VITAL_STATUS'] = 'Dead'
+dfncdb1.loc[dfncdb1['PUF_VITAL_STATUS'] == 1, 'PUF_VITAL_STATUS'] = 'Alive'
+
+# Define survival outcome (60-month survival)
+dfncdb1.loc[(dfncdb1['PUF_VITAL_STATUS'] == 'Dead') & (dfncdb1['DX_LASTCONTACT_DEATH_MONTHS'] < 60), '60M_SURV'] = 'No'
+dfncdb1.loc[(dfncdb1['PUF_VITAL_STATUS'] == 'Dead') & (dfncdb1['DX_LASTCONTACT_DEATH_MONTHS'] >= 60), '60M_SURV'] = 'Yes'
+dfncdb1.loc[(dfncdb1['PUF_VITAL_STATUS'] == 'Alive') & (dfncdb1['DX_LASTCONTACT_DEATH_MONTHS'] >= 60), '60M_SURV'] = 'Yes'
+
+# Print the counts for the 60-month survival outcome
+print(dfncdb1['60M_SURV'].value_counts(normalize=False, dropna=False))
+
+# Exclude patients with missing 60-month survival data
+dfncdb1 = dfncdb1[dfncdb1['60M_SURV'].notna()]
+
+print('Number of included patients:', dfncdb1.shape[0])
+
+###Preprocessing NCDB data
+
+# Remove outcomes from preprocessing
+data_cols = list(dfncdb1.columns)
+outcomes = ['DX_LASTCONTACT_DEATH_MONTHS', 'PUF_VITAL_STATUS', '60M_SURV']
+data_cols = [i for i in data_cols if i not in outcomes]
+
+print(dfncdb1.shape)
+
+# Label encode for imputation.
+from sklearn.preprocessing import LabelEncoder
+
+label_encoders = {}
+cat_cols = list(dfncdb1.select_dtypes('object').columns)
+cat_cols = [i for i in cat_cols if i not in outcomes]
+
+encoded_data = dfncdb1.copy()
+for col in cat_cols:
+    label_encoders[col] = LabelEncoder()
+    valid_mask = encoded_data[col].notna()
+    encoded_data.loc[valid_mask, col] = label_encoders[col].fit_transform(encoded_data.loc[valid_mask, col])
+
+# Check for and exclude missing values if >25%.
+missing_x = encoded_data[data_cols].isnull().mean().round(4).mul(100).sort_values(ascending=False)
+print(missing_x, '\n')
+
+missing_x = pd.DataFrame(missing_x, columns=['Value'])
+missing_x = missing_x[missing_x['Value'] > 0]
+print('Variables with missing values: ', list(missing_x.index), '\n')
+print('Number of variables with missing values: ', len(list(missing_x.index)), '\n')
+
+missing_x = missing_x[missing_x['Value'] > 25]
+missing_x = list(missing_x.index)
+print('Excluded variables: ', missing_x)
+
+encoded_data.drop(missing_x, axis=1, inplace=True)
+
+# Define new numerical columns and impute missing data.
+data_cols = [x for x in data_cols if x not in missing_x]
+
+imputer = IterativeImputer(random_state=31)
+encoded_data[data_cols] = imputer.fit_transform(encoded_data[data_cols])
+encoded_data[data_cols] = encoded_data[data_cols].round()
+
+# Reverse label encoding.
+for col in cat_cols:
+    valid_mask = encoded_data[col].notna()
+    encoded_data.loc[valid_mask, col] = label_encoders[col].inverse_transform(encoded_data.loc[valid_mask, col].astype(int))
+
+###Manual label encoding for each variable
+
+encoded_data.loc[encoded_data['SEX'] == 'FEMALE', 'SEX'] = 0
+encoded_data.loc[encoded_data['SEX'] == 'MALE', 'SEX'] = 1
+
+encoded_data.loc[encoded_data['RACE'] == 'WHITE', 'RACE'] = 0
+encoded_data.loc[encoded_data['RACE'] == 'BLACK', 'RACE'] = 1
+encoded_data.loc[encoded_data['RACE'] == 'OTHER', 'RACE'] = 2
+
+encoded_data.loc[encoded_data['RX_SUMM_SURG_PRIM_SITE'] == 'Ileal conduit', 'RX_SUMM_SURG_PRIM_SITE'] = 0
+encoded_data.loc[encoded_data['RX_SUMM_SURG_PRIM_SITE'] == 'Continent Diversion', 'RX_SUMM_SURG_PRIM_SITE'] = 1
+
+encoded_data.loc[encoded_data['RX_HOSP_SURG_APPR_2010'] == 'Open', 'RX_HOSP_SURG_APPR_2010'] = 0
+encoded_data.loc[encoded_data['RX_HOSP_SURG_APPR_2010'] == 'Lap', 'RX_HOSP_SURG_APPR_2010'] = 1
+encoded_data.loc[encoded_data['RX_HOSP_SURG_APPR_2010'] == 'Robotic', 'RX_HOSP_SURG_APPR_2010'] = 2
+encoded_data.loc[encoded_data['RX_HOSP_SURG_APPR_2010'] == 'Rob2Open', 'RX_HOSP_SURG_APPR_2010'] = 3
+encoded_data.loc[encoded_data['RX_HOSP_SURG_APPR_2010'] == 'Lap2Open', 'RX_HOSP_SURG_APPR_2010'] = 4
+
+encoded_data.loc[encoded_data['CDCC_TOTAL_BEST'] == 'CCI=0', 'CDCC_TOTAL_BEST'] = 0
+encoded_data.loc[encoded_data['CDCC_TOTAL_BEST'] == 'CCI=1', 'CDCC_TOTAL_BEST'] = 1
+encoded_data.loc[encoded_data['CDCC_TOTAL_BEST'] == 'CCI=2', 'CDCC_TOTAL_BEST'] = 2
+encoded_data.loc[encoded_data['CDCC_TOTAL_BEST'] == 'CCI greater or equal to 3', 'CDCC_TOTAL_BEST'] = 3
+
+encoded_data.loc[encoded_data['UR_CD_13'] == 'Rural', 'UR_CD_13'] = 0
+encoded_data.loc[encoded_data['UR_CD_13'] == 'Urban', 'UR_CD_13'] = 1
+encoded_data.loc[encoded_data['UR_CD_13'] == 'Metro', 'UR_CD_13'] = 2
+
+encoded_data.loc[encoded_data['INSURANCE_STATUS'] == 'Not Insured', 'INSURANCE_STATUS'] = 0
+encoded_data.loc[encoded_data['INSURANCE_STATUS'] == 'Private', 'INSURANCE_STATUS'] = 1
+encoded_data.loc[encoded_data['INSURANCE_STATUS'] == 'Medicad', 'INSURANCE_STATUS'] = 2
+encoded_data.loc[encoded_data['INSURANCE_STATUS'] == 'Medicare', 'INSURANCE_STATUS'] = 3
+encoded_data.loc[encoded_data['INSURANCE_STATUS'] == 'Other Gov', 'INSURANCE_STATUS'] = 4
+encoded_data.loc[encoded_data['INSURANCE_STATUS'] == 'Unknown', 'INSURANCE_STATUS'] = 5
+
+encoded_data.loc[encoded_data['MED_INC_QUAR_2020'] == 'less_than_46277', 'MED_INC_QUAR_2020'] = 0
+encoded_data.loc[encoded_data['MED_INC_QUAR_2020'] == '46277 to 57856', 'MED_INC_QUAR_2020'] = 1
+encoded_data.loc[encoded_data['MED_INC_QUAR_2020'] == '57857 to 74062', 'MED_INC_QUAR_2020'] = 2
+encoded_data.loc[encoded_data['MED_INC_QUAR_2020'] == 'more_than_74063', 'MED_INC_QUAR_2020'] = 3
+
+encoded_data.loc[encoded_data['FACILITY_TYPE_CD'] == 'community_cancer_program', 'FACILITY_TYPE_CD'] = 0
+encoded_data.loc[encoded_data['FACILITY_TYPE_CD'] == 'compre_community_cancer_program', 'FACILITY_TYPE_CD'] = 1
+encoded_data.loc[encoded_data['FACILITY_TYPE_CD'] == 'ARP', 'FACILITY_TYPE_CD'] = 2
+encoded_data.loc[encoded_data['FACILITY_TYPE_CD'] == 'INCP', 'FACILITY_TYPE_CD'] = 3
+encoded_data.loc[encoded_data['FACILITY_TYPE_CD'] == 'Unspecified', 'FACILITY_TYPE_CD'] = 4
+
+
+encoded_data.loc[encoded_data['PRIMARY_SITE'] == 'Trigone', 'PRIMARY_SITE'] = 0
+encoded_data.loc[encoded_data['PRIMARY_SITE'] == 'Dome', 'PRIMARY_SITE'] = 1
+encoded_data.loc[encoded_data['PRIMARY_SITE'] == 'Lat_wall', 'PRIMARY_SITE'] = 2
+encoded_data.loc[encoded_data['PRIMARY_SITE'] == 'Ant_wall', 'PRIMARY_SITE'] = 3
+encoded_data.loc[encoded_data['PRIMARY_SITE'] == 'Post_wall', 'PRIMARY_SITE'] = 4
+encoded_data.loc[encoded_data['PRIMARY_SITE'] == 'Bladder_neck', 'PRIMARY_SITE'] = 5
+encoded_data.loc[encoded_data['PRIMARY_SITE'] == 'ureteric_orifice', 'PRIMARY_SITE'] = 6
+encoded_data.loc[encoded_data['PRIMARY_SITE'] == 'urachus', 'PRIMARY_SITE'] = 7
+encoded_data.loc[encoded_data['PRIMARY_SITE'] == 'overlapping', 'PRIMARY_SITE'] = 8
+encoded_data.loc[encoded_data['PRIMARY_SITE'] == 'unspecified', 'PRIMARY_SITE'] = 9
+
+encoded_data.loc[encoded_data['HISTOLOGY'] == 'Benign', 'HISTOLOGY'] = 0
+encoded_data.loc[encoded_data['HISTOLOGY'] == 'UCC', 'HISTOLOGY'] = 1
+encoded_data.loc[encoded_data['HISTOLOGY'] == 'Adenoca', 'HISTOLOGY'] = 2
+encoded_data.loc[encoded_data['HISTOLOGY'] == 'MalignantOther', 'HISTOLOGY'] = 3
+
+encoded_data.loc[encoded_data['GRADE_MERGED'] == 'Low', 'GRADE_MERGED'] = 0
+encoded_data.loc[encoded_data['GRADE_MERGED'] == 'High', 'GRADE_MERGED'] = 1
+encoded_data.loc[encoded_data['GRADE_MERGED'] == 'Unknown', 'GRADE_MERGED'] = 2
+
+encoded_data.loc[encoded_data['TNM_CLIN_T_FINAL'] == 'T0', 'TNM_CLIN_T_FINAL'] = 0
+encoded_data.loc[encoded_data['TNM_CLIN_T_FINAL'] == 'Tis', 'TNM_CLIN_T_FINAL'] = 1
+encoded_data.loc[encoded_data['TNM_CLIN_T_FINAL'] == 'T1', 'TNM_CLIN_T_FINAL'] = 2
+encoded_data.loc[encoded_data['TNM_CLIN_T_FINAL'] == 'T2', 'TNM_CLIN_T_FINAL'] = 3
+encoded_data.loc[encoded_data['TNM_CLIN_T_FINAL'] == 'T3', 'TNM_CLIN_T_FINAL'] = 4
+encoded_data.loc[encoded_data['TNM_CLIN_T_FINAL'] == 'T4', 'TNM_CLIN_T_FINAL'] = 5
+
+encoded_data.loc[encoded_data['TNM_CLIN_N_FINAL'] == 'N0_stage', 'TNM_CLIN_N_FINAL'] = 0
+encoded_data.loc[encoded_data['TNM_CLIN_N_FINAL'] == 'N1_stage', 'TNM_CLIN_N_FINAL'] = 1
+encoded_data.loc[encoded_data['TNM_CLIN_N_FINAL'] == 'N2_stage', 'TNM_CLIN_N_FINAL'] = 2
+encoded_data.loc[encoded_data['TNM_CLIN_N_FINAL'] == 'N3_stage', 'TNM_CLIN_N_FINAL'] = 3
+
+encoded_data.loc[encoded_data['TNM_CLIN_M_FINAL'] == 'M0_stage', 'TNM_CLIN_M_FINAL'] = 0
+encoded_data.loc[encoded_data['TNM_CLIN_M_FINAL'] == 'M1_stage', 'TNM_CLIN_M_FINAL'] = 1
+
+encoded_data.loc[encoded_data['REGIONAL_NODES_EXAMINED'] == 'Not performed', 'REGIONAL_NODES_EXAMINED'] = 0
+encoded_data.loc[encoded_data['REGIONAL_NODES_EXAMINED'] == 'Yes', 'REGIONAL_NODES_EXAMINED'] = 1
+encoded_data.loc[encoded_data['REGIONAL_NODES_EXAMINED'] == 'unknown', 'REGIONAL_NODES_EXAMINED'] = 2
+
+encoded_data.loc[encoded_data['RX_SUMM_SYSTEMIC_SUR_SEQ'] == 'NO_SYS_THERAPY', 'RX_SUMM_SYSTEMIC_SUR_SEQ'] = 0
+encoded_data.loc[encoded_data['RX_SUMM_SYSTEMIC_SUR_SEQ'] == 'NEO ADJUVANT', 'RX_SUMM_SYSTEMIC_SUR_SEQ'] = 1
+encoded_data.loc[encoded_data['RX_SUMM_SYSTEMIC_SUR_SEQ'] == 'ADJUVANT', 'RX_SUMM_SYSTEMIC_SUR_SEQ'] = 2
+encoded_data.loc[encoded_data['RX_SUMM_SYSTEMIC_SUR_SEQ'] == 'BOTH', 'RX_SUMM_SYSTEMIC_SUR_SEQ'] = 3
+
+# Convert all encoded columns to integer
+columns = [
+    'SEX', 'RACE', 'RX_SUMM_SURG_PRIM_SITE', 'RX_HOSP_SURG_APPR_2010',
+    'CDCC_TOTAL_BEST', 'UR_CD_13', 'INSURANCE_STATUS', 'MED_INC_QUAR_2020',
+    'FACILITY_TYPE_CD', 'PRIMARY_SITE', 'HISTOLOGY', 'GRADE_MERGED',
+    'TNM_CLIN_T_FINAL', 'TNM_CLIN_N_FINAL', 'TNM_CLIN_M_FINAL',
+    'REGIONAL_NODES_EXAMINED', 'RX_SUMM_SYSTEMIC_SUR_SEQ'
+]
+
+for col in columns:
+    encoded_data[col] = encoded_data[col].astype(int)
+
+#Save preprocessed data
+encoded_data.to_csv('ncdbto_preprocessed.csv', index=False)
