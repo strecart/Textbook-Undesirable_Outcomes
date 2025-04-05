@@ -1,0 +1,555 @@
+### 5. Machine Learning models for prediction of Textbook outcome
+
+import numpy as np
+import pandas as pd
+import sklearn
+import sklearn.metrics
+from sklearn.metrics import (
+    roc_auc_score, roc_curve, precision_recall_curve, average_precision_score,
+    auc, precision_score, recall_score, accuracy_score, balanced_accuracy_score,
+    brier_score_loss, confusion_matrix
+)
+from sklearn.model_selection import train_test_split
+from sklearn.utils import resample
+from scipy import stats as st
+from matplotlib import pyplot as plt
+from tabpfn import TabPFNClassifier
+from sklearn.linear_model import LogisticRegression
+from imblearn.over_sampling import SMOTE
+
+### Load data and select variables
+
+variables = ["TO", "SEX", "RACE_NEW", "CYST_APPROACH_NEW", "ETHNICITY_HISPANIC", "mfi5", "UrinDiv",
+             "DIALYSIS", "DISCANCR", "STEROID", "TRANSFUS", "NODE_DISSECT", "SMOKE", "ASACLAS", "CYST_CHEMO",
+             "CYST_PRIOR_PRADIO", "CYST_PRIORPEL", "Age", "BMI", "PRSODM", "PRBUN", "PRCREAT", "PRWBC", "PRHCT", "PRPLATE"]
+
+data = pd.read_csv("encodeddataprocessedALL.csv", usecols=variables)
+
+data["TO"] = data["TO"].map({"No": 0, "Yes": 1})
+
+
+### Define variables
+
+outcome_var = "TO"
+
+categorical_vars = [
+     "SEX", "RACE_NEW", "ETHNICITY_HISPANIC", "CYST_APPROACH_NEW", "mfi5", "UrinDiv", "SMOKE",
+    "ASACLAS", "DIALYSIS", "DISCANCR", "STEROID", "TRANSFUS", "NODE_DISSECT",
+    "CYST_CHEMO", "CYST_PRIOR_PRADIO", "CYST_PRIORPEL"
+]
+
+continuous_vars = [
+    "Age", "BMI", "PRSODM", "PRBUN", "PRCREAT", "PRWBC", "PRHCT", "PRPLATE"
+]
+
+### define predictors and outcome (X and y respectively)
+data = data.dropna(subset=[outcome_var])  # (Ensure no missing outcome values)
+
+X = data[categorical_vars + continuous_vars]
+y = data[outcome_var]
+
+### Split into training, validation and testing datasets- first training + validation and testing
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
+print("\nData Split Summary:")
+print("Number patients in X_train:", X_train.shape[0])
+print("Number patients in y_train:", y_train.shape[0])
+print("Number patients in X_test:", X_test.shape[0])
+print("Number patients in y_test:", y_test.shape[0])
+
+        # split into training and validation
+train_X, valid_X, train_y, valid_y = train_test_split(X_train, y_train, test_size=0.25, random_state=0)
+print("\nTrain/Validation Split Summary:")
+print("Number patients in train_X:", train_X.shape[0])
+print("Number patients in train_y:", train_y.shape[0])
+print("Number patients in valid_X:", valid_X.shape[0])
+print("Number patients in valid_y:", valid_y.shape[0])
+
+### SMOTE for class imbalance with checks of dataframe
+
+print("\nBefore resampling, label counts in train_y:")
+print("Label 1:", sum(train_y == 1), "Label 0:", sum(train_y == 0), "\n")
+
+smote = SMOTE(random_state=0)
+train_X, train_y = smote.fit_resample(train_X, train_y)
+print("After resampling, label counts in train_y:")
+print("Label 1:", sum(train_y == 1), "Label 0:", sum(train_y == 0), "\n")
+
+### define AUROC with 95% confidence intervals
+def auroc_ci(y_true, y_probs, n_samples=1000, alpha=0.05):
+    """
+    Compute AUROC with 95% confidence interval using bootstrapping.
+    """
+    auroc_values = []
+    for _ in range(n_samples):
+        y_true_bs, y_probs_bs = resample(y_true, y_probs)
+        auroc = roc_auc_score(y_true_bs, y_probs_bs)
+        auroc_values.append(auroc)
+    mean_auroc = np.mean(auroc_values)
+    std_auroc = np.std(auroc_values)
+    lower_ci = mean_auroc - 1.96 * std_auroc
+    upper_ci = mean_auroc + 1.96 * std_auroc
+    return mean_auroc, lower_ci, upper_ci
+
+confidence = 0.95
+z_value = st.norm.ppf((1 + confidence) / 2.0)
+
+### Random Forest model
+import optuna
+from optuna.samplers import TPESampler
+from sklearn.ensemble import RandomForestClassifier
+
+
+def objective(trial):
+    param = {
+        "criterion": trial.suggest_categorical("criterion", ["gini", "entropy"]),
+        "random_state": 31,
+        # Removed "auto" from max_features to ensure validity
+        "max_features": trial.suggest_categorical("max_features", ["sqrt", "log2", None]),
+        "max_depth": trial.suggest_int("max_depth", 1, 100),
+        "n_estimators": trial.suggest_int("n_estimators", 100, 2000, step=100),
+        "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 4, step=1),
+        "min_samples_split": trial.suggest_int("min_samples_split", 2, 10, step=1),
+    }
+    rf = RandomForestClassifier(**param)
+    rf.fit(train_X, train_y)
+    preds = rf.predict(valid_X)
+    pred_labels = np.rint(preds)
+    auc_score = roc_auc_score(valid_y, pred_labels)
+    return auc_score
+
+if __name__ == "__main__":
+    study = optuna.create_study(direction='maximize', sampler=TPESampler(seed=31))
+    study.optimize(objective, n_trials=100, timeout=600)
+
+    print("Number of finished trials: {}".format(len(study.trials)))
+    print("Best trial:")
+    trial = study.best_trial
+    print("  Value: {}".format(trial.value))
+    print("  Params: ")
+    for key, value in trial.params.items():
+        print("    {}: {}".format(key, value))
+
+    # Determine best parameters
+    rf_params = {}
+    for key, value in trial.params.items():
+        rf_params[key] = value
+    rf_params['random_state'] = 31
+
+    print("\nRandom Forest Parameters:")
+    print(rf_params)
+
+    # Fit RF model using best parameters
+    rf = RandomForestClassifier(**rf_params)
+    rf.fit(train_X, train_y)
+
+    # Calibrate using validation set
+    calib_probs_rf = rf.predict_proba(valid_X)
+    calib_model_rf = LogisticRegression()
+    calib_model_rf.fit(calib_probs_rf, valid_y)
+
+    # Predict using test set
+    preds_rf = rf.predict(X_test)
+    uncalibrated_probs_rf = rf.predict_proba(X_test)
+    probs_rf = calib_model_rf.predict_proba(uncalibrated_probs_rf)[:, 1]
+
+    ## Evaluate RF model
+    rf_tn, rf_fp, rf_fn, rf_tp = confusion_matrix(y_test, preds_rf).ravel()
+
+    rf_sensitivity = round(rf_tp / (rf_tp + rf_fn), 3)
+    rf_sensitivity_ci_length = z_value * np.sqrt((rf_sensitivity * (1 - rf_sensitivity)) / y_test.shape[0])
+    rf_sensitivity_ci_lower = round((rf_sensitivity - rf_sensitivity_ci_length), 3)
+    rf_sensitivity_ci_upper = round((rf_sensitivity + rf_sensitivity_ci_length), 3)
+    rf_sensitivity_str = f"{rf_sensitivity} ({rf_sensitivity_ci_lower} - {rf_sensitivity_ci_upper})"
+
+    rf_specificity = round(rf_tn / (rf_tn + rf_fp), 3)
+    rf_specificity_ci_length = z_value * np.sqrt((rf_specificity * (1 - rf_specificity)) / y_test.shape[0])
+    rf_specificity_ci_lower = round((rf_specificity - rf_specificity_ci_length), 3)
+    rf_specificity_ci_upper = round((rf_specificity + rf_specificity_ci_length), 3)
+    rf_specificity_str = f"{rf_specificity} ({rf_specificity_ci_lower} - {rf_specificity_ci_upper})"
+
+    rf_auprc = round(average_precision_score(y_test, probs_rf), 3)
+    rf_auprc_ci_length = z_value * np.sqrt((rf_auprc * (1 - rf_auprc)) / y_test.shape[0])
+    rf_auprc_ci_lower = round((rf_auprc - rf_auprc_ci_length), 3)
+    rf_auprc_ci_upper = round((rf_auprc + rf_auprc_ci_length), 3)
+    rf_auprc_str = f"{rf_auprc} ({rf_auprc_ci_lower} - {rf_auprc_ci_upper})"
+
+    rf_accuracy = round(accuracy_score(y_test, preds_rf), 3)
+    rf_accuracy_ci_length = z_value * np.sqrt((rf_accuracy * (1 - rf_accuracy)) / y_test.shape[0])
+    rf_accuracy_ci_lower = round((rf_accuracy - rf_accuracy_ci_length), 3)
+    rf_accuracy_ci_upper = round((rf_accuracy + rf_accuracy_ci_length), 3)
+    rf_accuracy_str = f"{rf_accuracy} ({rf_accuracy_ci_lower} - {rf_accuracy_ci_upper})"
+
+    rf_auroc, rf_auroc_ci_lower, rf_auroc_ci_upper = auroc_ci(y_test, probs_rf)
+    rf_auroc = round(rf_auroc, 3)
+    rf_auroc_ci_lower = round(rf_auroc_ci_lower, 3)
+    rf_auroc_ci_upper = round(rf_auroc_ci_upper, 3)
+    rf_auroc_str = f"{rf_auroc} ({rf_auroc_ci_lower} - {rf_auroc_ci_upper})"
+
+    rf_brier = round(brier_score_loss(y_test, probs_rf), 3)
+    rf_brier_ci_length = z_value * np.sqrt((rf_brier * (1 - rf_brier)) / y_test.shape[0])
+    rf_brier_ci_lower = round((rf_brier - rf_brier_ci_length), 3)
+    rf_brier_ci_upper = round((rf_brier + rf_brier_ci_length), 3)
+    rf_brier_str = f"{rf_brier} ({rf_brier_ci_lower} - {rf_brier_ci_upper})"
+
+    print("\n----- Random Forest Model Evaluation -----")
+    print("Sensitivity:", rf_sensitivity_str)
+    print("Specificity:", rf_specificity_str)
+    print("AUPRC:", rf_auprc_str)
+    print("Accuracy:", rf_accuracy_str)
+    print("AUROC:", rf_auroc_str)
+    print("Brier Score:", rf_brier_str)
+
+
+### LightGBM Model
+import optuna
+from optuna.samplers import TPESampler
+import lightgbm as lgb
+
+
+def objective(trial):
+    dtrain = lgb.Dataset(train_X, label=train_y)
+
+    param = {
+        "objective": trial.suggest_categorical("objective", ["binary"]),
+        "metric": "binary_logloss",
+        "verbosity": -1,
+        "random_state": 31,
+        "boosting_type": trial.suggest_categorical("boosting_type", ["gbdt"]),
+        "lambda_l1": trial.suggest_float("lambda_l1", 1e-8, 10.0, log=True),
+        "lambda_l2": trial.suggest_float("lambda_l2", 1e-8, 10.0, log=True),
+        "num_leaves": trial.suggest_int("num_leaves", 2, 256),
+        "feature_fraction": trial.suggest_float("feature_fraction", 0.4, 1.0),
+        "bagging_fraction": trial.suggest_float("bagging_fraction", 0.4, 1.0),
+        "bagging_freq": trial.suggest_int("bagging_freq", 1, 7),
+        "min_child_samples": trial.suggest_int("min_child_samples", 5, 100),
+    }
+
+    gbm_model = lgb.train(param, dtrain)
+    preds = gbm_model.predict(valid_X)
+    pred_labels = np.rint(preds)
+    auc_score = roc_auc_score(valid_y, pred_labels)
+    return auc_score
+
+if __name__ == "__main__":
+    study = optuna.create_study(direction="maximize", sampler=TPESampler(seed=31))
+    study.optimize(objective, n_trials=100)
+    print("Number of finished trials: {}".format(len(study.trials)))
+
+    print("Best trial:")
+    trial = study.best_trial
+    print("  Value: {}".format(trial.value))
+    print("  Params: ")
+    for key, value in trial.params.items():
+        print("    {}: {}".format(key, value))
+
+    lgb_params = {}
+    for key, value in trial.params.items():
+        lgb_params[key] = value
+
+    # Set fixed parameters
+    lgb_params['metric'] = 'binary_logloss'
+    lgb_params['verbosity'] = -1
+    lgb_params['random_state'] = 31
+
+    print("\nLightGBM Parameters:")
+    print(lgb_params)
+
+    lgb_model = lgb.LGBMClassifier(**lgb_params)
+    lgb_model.fit(train_X, train_y)
+
+    # Calibrate on validation set
+    calib_probs_lgb = lgb_model.predict_proba(valid_X)
+    calib_model_lgb = LogisticRegression()
+    calib_model_lgb.fit(calib_probs_lgb, valid_y)
+
+    # Predict using test set
+    preds_lgb = lgb_model.predict(X_test)
+    uncalibrated_probs_lgb = lgb_model.predict_proba(X_test)
+    probs_lgb = calib_model_lgb.predict_proba(uncalibrated_probs_lgb)[:, 1]
+
+    # Assess LightGBM Model
+    lgb_tn, lgb_fp, lgb_fn, lgb_tp = confusion_matrix(y_test, preds_lgb).ravel()
+
+    lgb_sensitivity = round(lgb_tp / (lgb_tp + lgb_fn), 3)
+    lgb_sensitivity_ci_length = z_value * np.sqrt((lgb_sensitivity * (1 - lgb_sensitivity)) / y_test.shape[0])
+    lgb_sensitivity_ci_lower = round((lgb_sensitivity - lgb_sensitivity_ci_length), 3)
+    lgb_sensitivity_ci_upper = round((lgb_sensitivity + lgb_sensitivity_ci_length), 3)
+    lgb_sensitivity_str = f"{lgb_sensitivity} ({lgb_sensitivity_ci_lower} - {lgb_sensitivity_ci_upper})"
+
+    lgb_specificity = round(lgb_tn / (lgb_tn + lgb_fp), 3)
+    lgb_specificity_ci_length = z_value * np.sqrt((lgb_specificity * (1 - lgb_specificity)) / y_test.shape[0])
+    lgb_specificity_ci_lower = round((lgb_specificity - lgb_specificity_ci_length), 3)
+    lgb_specificity_ci_upper = round((lgb_specificity + lgb_specificity_ci_length), 3)
+    lgb_specificity_str = f"{lgb_specificity} ({lgb_specificity_ci_lower} - {lgb_specificity_ci_upper})"
+
+    lgb_auprc = round(average_precision_score(y_test, probs_lgb), 3)
+    lgb_auprc_ci_length = z_value * np.sqrt((lgb_auprc * (1 - lgb_auprc)) / y_test.shape[0])
+    lgb_auprc_ci_lower = round((lgb_auprc - lgb_auprc_ci_length), 3)
+    lgb_auprc_ci_upper = round((lgb_auprc + lgb_auprc_ci_length), 3)
+    lgb_auprc_str = f"{lgb_auprc} ({lgb_auprc_ci_lower} - {lgb_auprc_ci_upper})"
+
+    lgb_accuracy = round(accuracy_score(y_test, preds_lgb), 3)
+    lgb_accuracy_ci_length = z_value * np.sqrt((lgb_accuracy * (1 - lgb_accuracy)) / y_test.shape[0])
+    lgb_accuracy_ci_lower = round((lgb_accuracy - lgb_accuracy_ci_length), 3)
+    lgb_accuracy_ci_upper = round((lgb_accuracy + lgb_accuracy_ci_length), 3)
+    lgb_accuracy_str = f"{lgb_accuracy} ({lgb_accuracy_ci_lower} - {lgb_accuracy_ci_upper})"
+
+    lgb_auroc, lgb_auroc_ci_lower, lgb_auroc_ci_upper = auroc_ci(y_test, probs_lgb)
+    lgb_auroc = round(lgb_auroc, 3)
+    lgb_auroc_ci_lower = round(lgb_auroc_ci_lower, 3)
+    lgb_auroc_ci_upper = round(lgb_auroc_ci_upper, 3)
+    lgb_auroc_str = f"{lgb_auroc} ({lgb_auroc_ci_lower} - {lgb_auroc_ci_upper})"
+
+    lgb_brier = round(brier_score_loss(y_test, probs_lgb), 3)
+    lgb_brier_ci_length = z_value * np.sqrt((lgb_brier * (1 - lgb_brier)) / y_test.shape[0])
+    lgb_brier_ci_lower = round((lgb_brier - lgb_brier_ci_length), 3)
+    lgb_brier_ci_upper = round((lgb_brier + lgb_brier_ci_length), 3)
+    lgb_brier_str = f"{lgb_brier} ({lgb_brier_ci_lower} - {lgb_brier_ci_upper})"
+
+    print("\n----- LightGBM Model Evaluation -----")
+    print("Sensitivity:", lgb_sensitivity_str)
+    print("Specificity:", lgb_specificity_str)
+    print("AUPRC:", lgb_auprc_str)
+    print("Accuracy:", lgb_accuracy_str)
+    print("AUROC:", lgb_auroc_str)
+    print("Brier Score:", lgb_brier_str)
+
+
+### XGBoost Model
+import xgboost as xgb
+import optuna
+from optuna.samplers import TPESampler
+
+def objective(trial):
+    dtrain = xgb.DMatrix(train_X, label=train_y)
+    dvalid = xgb.DMatrix(valid_X, label=valid_y)
+
+    param = {
+        "seed": 31,
+        "verbosity": 0,
+        "objective": trial.suggest_categorical("objective", ["binary:logistic"]),
+        "eval_metric": "auc",
+        "booster": trial.suggest_categorical("booster", ["gbtree"]),
+        "lambda": trial.suggest_float("lambda", 1e-8, 1.0, log=True),
+        "alpha": trial.suggest_float("alpha", 1e-8, 1.0, log=True),
+        "max_depth": trial.suggest_int("max_depth", 1, 9),
+        "eta": trial.suggest_float("eta", 1e-8, 1.0, log=True),
+        "gamma": trial.suggest_float("gamma", 1e-8, 1.0, log=True),
+        "grow_policy": trial.suggest_categorical("grow_policy", ["depthwise", "lossguide"])
+    }
+
+    pruning_callback = optuna.integration.XGBoostPruningCallback(trial, "validation-auc")
+    bst = xgb.train(param, dtrain, evals=[(dvalid, "validation")], callbacks=[pruning_callback])
+    preds = bst.predict(dvalid)
+    pred_labels = np.rint(preds)
+    auc_score = roc_auc_score(valid_y, pred_labels)
+    return auc_score
+
+if __name__ == "__main__":
+    # Optimize hyperparameters using Optuna
+    study = optuna.create_study(
+        pruner=optuna.pruners.MedianPruner(n_warmup_steps=5),
+        direction="maximize",
+        sampler=TPESampler(seed=31)
+    )
+    study.optimize(objective, n_trials=100)
+    print("Number of finished trials: {}".format(len(study.trials)))
+
+    print("Best trial:")
+    trial = study.best_trial
+    print("  Value: {}".format(trial.value))
+    print("  Params: ")
+    for key, value in trial.params.items():
+        print("    {}: {}".format(key, value))
+
+    # Set parameters based on best trial
+    xgb_params = {}
+    for key, value in trial.params.items():
+        xgb_params[key] = value
+
+    xgb_params['eval_metric'] = 'auc'
+    xgb_params['verbosity'] = 0
+    xgb_params['seed'] = 31
+
+    print("\nXGBoost Parameters:")
+    print(xgb_params)
+
+    # Fit using XGBClassifier
+    from xgboost import XGBClassifier
+    xgb_model = XGBClassifier(**xgb_params)
+    xgb_model.fit(train_X, train_y)
+
+    # Calibrate on validation set
+    calib_probs_xgb = xgb_model.predict_proba(valid_X)
+    calib_model_xgb = LogisticRegression()
+    calib_model_xgb.fit(calib_probs_xgb, valid_y)
+
+    # Predict on Test set
+    preds_xgb = xgb_model.predict(X_test)
+    uncalibrated_probs_xgb = xgb_model.predict_proba(X_test)
+    probs_xgb = calib_model_xgb.predict_proba(uncalibrated_probs_xgb)[:, 1]
+
+    # Evaluate model
+    xgb_tn, xgb_fp, xgb_fn, xgb_tp = confusion_matrix(y_test, preds_xgb).ravel()
+    xgb_sensitivity = round(xgb_tp / (xgb_tp + xgb_fn), 3)
+    xgb_sensitivity_ci_length = z_value * np.sqrt((xgb_sensitivity * (1 - xgb_sensitivity)) / y_test.shape[0])
+    xgb_sensitivity_ci_lower = round((xgb_sensitivity - xgb_sensitivity_ci_length), 3)
+    xgb_sensitivity_ci_upper = round((xgb_sensitivity + xgb_sensitivity_ci_length), 3)
+    xgb_sensitivity_str = f"{xgb_sensitivity} ({xgb_sensitivity_ci_lower} - {xgb_sensitivity_ci_upper})"
+
+    xgb_specificity = round(xgb_tn / (xgb_tn + xgb_fp), 3)
+    xgb_specificity_ci_length = z_value * np.sqrt((xgb_specificity * (1 - xgb_specificity)) / y_test.shape[0])
+    xgb_specificity_ci_lower = round((xgb_specificity - xgb_specificity_ci_length), 3)
+    xgb_specificity_ci_upper = round((xgb_specificity + xgb_specificity_ci_length), 3)
+    xgb_specificity_str = f"{xgb_specificity} ({xgb_specificity_ci_lower} - {xgb_specificity_ci_upper})"
+
+    xgb_auprc = round(average_precision_score(y_test, probs_xgb), 3)
+    xgb_auprc_ci_length = z_value * np.sqrt((xgb_auprc * (1 - xgb_auprc)) / y_test.shape[0])
+    xgb_auprc_ci_lower = round((xgb_auprc - xgb_auprc_ci_length), 3)
+    xgb_auprc_ci_upper = round((xgb_auprc + xgb_auprc_ci_length), 3)
+    xgb_auprc_str = f"{xgb_auprc} ({xgb_auprc_ci_lower} - {xgb_auprc_ci_upper})"
+
+    xgb_accuracy = round(accuracy_score(y_test, preds_xgb), 3)
+    xgb_accuracy_ci_length = z_value * np.sqrt((xgb_accuracy * (1 - xgb_accuracy)) / y_test.shape[0])
+    xgb_accuracy_ci_lower = round((xgb_accuracy - xgb_accuracy_ci_length), 3)
+    xgb_accuracy_ci_upper = round((xgb_accuracy + xgb_accuracy_ci_length), 3)
+    xgb_accuracy_str = f"{xgb_accuracy} ({xgb_accuracy_ci_lower} - {xgb_accuracy_ci_upper})"
+
+    xgb_auroc, xgb_auroc_ci_lower, xgb_auroc_ci_upper = auroc_ci(y_test, probs_xgb)
+    xgb_auroc = round(xgb_auroc, 3)
+    xgb_auroc_ci_lower = round(xgb_auroc_ci_lower, 3)
+    xgb_auroc_ci_upper = round(xgb_auroc_ci_upper, 3)
+    xgb_auroc_str = f"{xgb_auroc} ({xgb_auroc_ci_lower} - {xgb_auroc_ci_upper})"
+
+    xgb_brier = round(brier_score_loss(y_test, probs_xgb), 3)
+    xgb_brier_ci_length = z_value * np.sqrt((xgb_brier * (1 - xgb_brier)) / y_test.shape[0])
+    xgb_brier_ci_lower = round((xgb_brier - xgb_brier_ci_length), 3)
+    xgb_brier_ci_upper = round((xgb_brier + xgb_brier_ci_length), 3)
+    xgb_brier_str = f"{xgb_brier} ({xgb_brier_ci_lower} - {xgb_brier_ci_upper})"
+
+    print("\n----- XGBoost Model Evaluation -----")
+    print("Sensitivity:", xgb_sensitivity_str)
+    print("Specificity:", xgb_specificity_str)
+    print("AUPRC:", xgb_auprc_str)
+    print("Accuracy:", xgb_accuracy_str)
+    print("AUROC:", xgb_auroc_str)
+    print("Brier Score:", xgb_brier_str)
+
+### CatBoost Model
+
+from optuna.integration import CatBoostPruningCallback
+import optuna
+from catboost import CatBoostClassifier
+
+
+def objective(trial: optuna.Trial) -> float:
+    param = {
+        "objective": trial.suggest_categorical("objective", ["Logloss", "CrossEntropy"]),
+        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.01, 0.1, log=True),
+        "depth": trial.suggest_int("depth", 1, 12),
+        "boosting_type": trial.suggest_categorical("boosting_type", ["Ordered", "Plain"]),
+        "bootstrap_type": trial.suggest_categorical("bootstrap_type", ["Bayesian", "Bernoulli", "MVS"]),
+        "used_ram_limit": "3gb",
+        "eval_metric": "AUC"
+    }
+
+    if param["bootstrap_type"] == "Bayesian":
+        param["bagging_temperature"] = trial.suggest_float("bagging_temperature", 0, 10)
+    elif param["bootstrap_type"] == "Bernoulli":
+        param["subsample"] = trial.suggest_float("subsample", 0.1, 1, log=True)
+
+    gbm = CatBoostClassifier(**param, random_seed=31, verbose=0)
+
+    pruning_callback = CatBoostPruningCallback(trial, "AUC")
+    gbm.fit(
+        train_X,
+        train_y,
+        eval_set=[(valid_X, valid_y)],
+        early_stopping_rounds=100,
+        callbacks=[pruning_callback]
+    )
+
+    pruning_callback.check_pruned()
+
+    preds = gbm.predict(valid_X)
+    auc_value = roc_auc_score(valid_y, preds)
+    return auc_value
+
+study = optuna.create_study(
+    pruner=optuna.pruners.MedianPruner(n_warmup_steps=5), direction="maximize"
+)
+study.optimize(objective, n_trials=100, timeout=600)
+
+print("\nNumber of finished trials:", len(study.trials))
+print("Best trial:")
+trial = study.best_trial
+print("  Value:", trial.value)
+print("  Params:")
+for key, value in trial.params.items():
+    print(f"    {key}: {value}")
+
+cb_params = dict(trial.params)
+cb_params["random_seed"] = 31
+
+print("\nCatBoost Best Parameters:", cb_params)
+
+    # Fit with best parameters
+    cb = CatBoostClassifier(**cb_params, verbose=0)
+    cb.fit(train_X, train_y)
+
+    # Calibrate validation set
+    calib_probs_cb = cb.predict_proba(valid_X)
+    calib_model_cb = LogisticRegression()
+    calib_model_cb.fit(calib_probs_cb, valid_y)
+
+    #Predict using test set
+    preds_cb = cb.predict(X_test)
+    uncalibrated_probs_cb = cb.predict_proba(X_test)
+    probs_cb = calib_model_cb.predict_proba(uncalibrated_probs_cb)[:, 1]
+
+    # Evaluate model
+    cb_tn, cb_fp, cb_fn, cb_tp = confusion_matrix(y_test, preds_cb).ravel()
+
+    cb_sensitivity = round(cb_tp / (cb_tp + cb_fn), 3)
+    cb_sensitivity_ci_length = z_value * np.sqrt((cb_sensitivity * (1 - cb_sensitivity)) / y_test.shape[0])
+    cb_sensitivity_ci_lower = round(cb_sensitivity - cb_sensitivity_ci_length, 3)
+    cb_sensitivity_ci_upper = round(cb_sensitivity + cb_sensitivity_ci_length, 3)
+    cb_sensitivity_str = f"{cb_sensitivity} ({cb_sensitivity_ci_lower} - {cb_sensitivity_ci_upper})"
+
+    cb_specificity = round(cb_tn / (cb_tn + cb_fp), 3)
+    cb_specificity_ci_length = z_value * np.sqrt((cb_specificity * (1 - cb_specificity)) / y_test.shape[0])
+    cb_specificity_ci_lower = round(cb_specificity - cb_specificity_ci_length, 3)
+    cb_specificity_ci_upper = round(cb_specificity + cb_specificity_ci_length, 3)
+    cb_specificity_str = f"{cb_specificity} ({cb_specificity_ci_lower} - {cb_specificity_ci_upper})"
+
+    cb_accuracy = round(accuracy_score(y_test, preds_cb), 3)
+    cb_accuracy_ci_length = z_value * np.sqrt((cb_accuracy * (1 - cb_accuracy)) / y_test.shape[0])
+    cb_accuracy_ci_lower = round(cb_accuracy - cb_accuracy_ci_length, 3)
+    cb_accuracy_ci_upper = round(cb_accuracy + cb_accuracy_ci_length, 3)
+    cb_accuracy_str = f"{cb_accuracy} ({cb_accuracy_ci_lower} - {cb_accuracy_ci_upper})"
+
+    cb_auprc = round(average_precision_score(y_test, probs_cb), 3)
+    cb_auprc_ci_length = z_value * np.sqrt((cb_auprc * (1 - cb_auprc)) / y_test.shape[0])
+    cb_auprc_ci_lower = round(cb_auprc - cb_auprc_ci_length, 3)
+    cb_auprc_ci_upper = round(cb_auprc + cb_auprc_ci_length, 3)
+    cb_auprc_str = f"{cb_auprc} ({cb_auprc_ci_lower} - {cb_auprc_ci_upper})"
+
+    cb_brier = round(brier_score_loss(y_test, probs_cb), 3)
+    cb_brier_ci_length = z_value * np.sqrt((cb_brier * (1 - cb_brier)) / y_test.shape[0])
+    cb_brier_ci_lower = round(cb_brier - cb_brier_ci_length, 3)
+    cb_brier_ci_upper = round(cb_brier + cb_brier_ci_length, 3)
+    cb_brier_str = f"{cb_brier} ({cb_brier_ci_lower} - {cb_brier_ci_upper})"
+
+    cb_auroc, cb_auroc_ci_lower, cb_auroc_ci_upper = auroc_ci(y_test, probs_cb)
+    cb_auroc = round(cb_auroc, 3)
+    cb_auroc_ci_lower = round(cb_auroc_ci_lower, 3)
+    cb_auroc_ci_upper = round(cb_auroc_ci_upper, 3)
+    cb_auroc_str = f"{cb_auroc} ({cb_auroc_ci_lower} - {cb_auroc_ci_upper})"
+
+    print("\n----- CatBoost Model Evaluation -----")
+    print("Sensitivity:", cb_sensitivity_str)
+    print("Specificity:", cb_specificity_str)
+    print("AUPRC:", cb_auprc_str)
+    print("Accuracy:", cb_accuracy_str)
+    print("AUROC:", cb_auroc_str)
+    print("Brier Score:", cb_brier_str)
