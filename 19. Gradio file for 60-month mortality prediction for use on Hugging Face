@@ -1,0 +1,131 @@
+### 19. Gradio file for 60-month mortality prediction for use on Hugging Face.
+
+import gradio as gr
+import pandas as pd
+import lightgbm as lgb
+
+# Load model
+lgb_model_loaded = lgb.Booster(model_file="ncdb_lightgbm_model.txt")
+
+# Create mapping dictionaries
+sex_map = {"Female": 0, "Male": 1}
+race_map = {"White": 0, "Black": 1, "Other": 2}
+rx_surg_prim_map = {"Ileal conduit": 0, "Continent Diversion": 1}
+rx_hosp_map = {
+    "Open": 0,
+    "Laparoscopic": 1,
+    "Robotic": 2,
+    "Robot Assisted to Open": 3,
+    "Laparoscopic to Open Conversion": 4
+}
+cdcc_map = {"CCI=0": 0, "CCI=1": 1, "CCI=2": 2, "CCI greater or equal to 3": 3}
+ur_map = {"Rural": 0, "Urban": 1, "Metro": 2}
+insurance_map = {"Not Insured": 0, "Private": 1, "Medicaid": 2, "Medicare": 3, "Other Gov": 4, "Unknown": 5}
+med_inc_map = {
+    "Less than 46277": 0,
+    "46277 to 57856": 1,
+    "57857 to 74062": 2,
+    "More than 74063": 3
+}
+facility_map = {
+    "Community Cancer Program": 0,
+    "Comprehensive Community Cancer Program": 1,
+    "Academic/Research Program": 2,
+    "Integrated Network Cancer Program": 3,
+    "Unspecified": 4
+}
+primary_site_map = {
+    "Trigone": 0,
+    "Dome": 1,
+    "Lateral Wall": 2,
+    "Anterior Wall": 3,
+    "Posterior Wall": 4,
+    "Bladder Neck": 5,
+    "Ureteric Orifice": 6,
+    "Urachus": 7,
+    "Overlapping": 8,
+    "Unspecified": 9
+}
+histo_map = {"Benign": 0, "Urothelial carcinoma": 1, "Adenocarcinoma": 2, "Malignant Other": 3}
+grade_map = {"Low": 0, "High": 1, "Unknown": 2}
+tnm_t_map = {"cT0": 0, "cTis": 1, "cT1": 2, "cT2": 3, "cT3": 4, "cT4": 5}
+tnm_n_map = {"cN0": 0, "cN1": 1, "cN2": 2, "cN3": 3}
+tnm_m_map = {"cM0": 0, "cM1": 1}
+nodes_map = {"Not performed": 0, "Yes": 1, "Unknown": 2}
+rx_seq_map = {"No Systemic Therapy": 0, "Neoadjuvant therapy": 1, "Adjuvant therapy": 2, "Both": 3}
+
+# Gradio prediction function
+def predict_ncdb(
+    AGE,
+    SEX,
+    RACE,
+    RX_SUMM_SURG_PRIM_SITE,
+    RX_HOSP_SURG_APPR_2010,
+    CDCC_TOTAL_BEST,
+    UR_CD_13,
+    INSURANCE_STATUS,
+    MED_INC_QUAR_2020,
+    FACILITY_TYPE_CD,
+    PRIMARY_SITE,
+    HISTOLOGY,
+    GRADE_MERGED,
+    TNM_CLIN_T_FINAL,
+    TNM_CLIN_N_FINAL,
+    TNM_CLIN_M_FINAL,
+    REGIONAL_NODES_EXAMINED,
+    RX_SUMM_SYSTEMIC_SUR_SEQ
+):
+    data = {
+        "AGE": AGE,
+        "SEX": sex_map.get(SEX, 0),
+        "RACE": race_map.get(RACE, 0),
+        "RX_SUMM_SURG_PRIM_SITE": rx_surg_prim_map.get(RX_SUMM_SURG_PRIM_SITE, 0),
+        "RX_HOSP_SURG_APPR_2010": rx_hosp_map.get(RX_HOSP_SURG_APPR_2010, 0),
+        "CDCC_TOTAL_BEST": cdcc_map.get(CDCC_TOTAL_BEST, 0),
+        "UR_CD_13": ur_map.get(UR_CD_13, 0),
+        "INSURANCE_STATUS": insurance_map.get(INSURANCE_STATUS, 0),
+        "MED_INC_QUAR_2020": med_inc_map.get(MED_INC_QUAR_2020, 0),
+        "FACILITY_TYPE_CD": facility_map.get(FACILITY_TYPE_CD, 0),
+        "PRIMARY_SITE": primary_site_map.get(PRIMARY_SITE, 0),
+        "HISTOLOGY": histo_map.get(HISTOLOGY, 0),
+        "GRADE_MERGED": grade_map.get(GRADE_MERGED, 0),
+        "TNM_CLIN_T_FINAL": tnm_t_map.get(TNM_CLIN_T_FINAL, 0),
+        "TNM_CLIN_N_FINAL": tnm_n_map.get(TNM_CLIN_N_FINAL, 0),
+        "TNM_CLIN_M_FINAL": tnm_m_map.get(TNM_CLIN_M_FINAL, 0),
+        "REGIONAL_NODES_EXAMINED": nodes_map.get(REGIONAL_NODES_EXAMINED, 0),
+        "RX_SUMM_SYSTEMIC_SUR_SEQ": rx_seq_map.get(RX_SUMM_SYSTEMIC_SUR_SEQ, 0)
+    }
+    input_df = pd.DataFrame([data])
+    prob = lgb_model_loaded.predict(input_df)[0]
+    # Return prediction output as a probability up to 2 decimal places
+    return round(prob * 100, 2)
+
+# Set up gradio interface
+iface = gr.Interface(
+    fn=predict_ncdb,
+    inputs=[
+        gr.Number(value=70, label="Age (Continuous)", minimum=18, maximum=89),
+        gr.Dropdown(choices=["Female", "Male"], label="Sex"),
+        gr.Dropdown(choices=["White", "Black", "Other"], label="Race"),
+        gr.Dropdown(choices=["Ileal conduit", "Continent Diversion"], label="Primary Surgical Diversion"),
+        gr.Dropdown(choices=["Open", "Laparoscopic", "Robotic", "Robot Assisted to Open", "Laparoscopic to Open Conversion"], label="Surgical Approach"),
+        gr.Dropdown(choices=["CCI=0", "CCI=1", "CCI=2", "CCI greater or equal to 3"], label="CDCC Total Best"),
+        gr.Dropdown(choices=["Rural", "Urban", "Metro"], label="Urban-Rural"),
+        gr.Dropdown(choices=["Not Insured", "Private", "Medicaid", "Medicare", "Other Gov", "Unknown"], label="Insurance Status"),
+        gr.Dropdown(choices=["Less than 46277", "46277 to 57856", "57857 to 74062", "More than 74063"], label="Median Income Quarter 2020"),
+        gr.Dropdown(choices=["Community Cancer Program", "Comprehensive Community Cancer Program", "Academic/Research Program", "Integrated Network Cancer Program", "Unspecified"], label="Facility Type"),
+        gr.Dropdown(choices=["Trigone", "Dome", "Lateral Wall", "Anterior Wall", "Posterior Wall", "Bladder Neck", "Ureteric Orifice", "Urachus", "Overlapping", "Unspecified"], label="Primary Site"),
+        gr.Dropdown(choices=["Benign", "Urothelial carcinoma", "Adenocarcinoma", "Malignant Other"], label="Histology"),
+        gr.Dropdown(choices=["Low", "High", "Unknown"], label="Grade"),
+        gr.Dropdown(choices=["cT0", "cTis", "cT1", "cT2", "cT3", "cT4"], label="TNM Clinical T"),
+        gr.Dropdown(choices=["cN0", "cN1", "cN2", "cN3"], label="TNM Clinical N"),
+        gr.Dropdown(choices=["cM0", "cM1"], label="TNM Clinical M"),
+        gr.Dropdown(choices=["Not performed", "Yes", "Unknown"], label="Regional Nodes Examined"),
+        gr.Dropdown(choices=["No Systemic Therapy", "Neoadjuvant therapy", "Adjuvant therapy", "Both"], label="Systemic Surgery Sequence")
+    ],
+    outputs=gr.Number(label="Predicted 60-month mortality"),
+    title="NCDB 60-Month Mortality Prediction",
+    description="Enter patient data to predict 60-month mortality probability."
+)
+
+iface.launch()
