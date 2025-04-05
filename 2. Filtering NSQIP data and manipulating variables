@@ -1,0 +1,224 @@
+### 2. Filtering NSQIP data and manipulating variables
+
+import pandas as pd
+import numpy as np
+
+df = pd.read_csv("df.txt", sep="\t", encoding="latin1")
+
+### Further filters for CPT codes
+df = df[df['CPT'].isin([51590, 51595, 51596])]
+
+### Filter for bladder cancer diagnoses (i.e. C67.0- C67.9)
+df = df[df['PODIAG10'].str.contains("^C67", regex=True, na=False)]
+
+### Create variable for performing of lymph node dissection
+
+conditions = [
+    df['CYST_NODESEVAL'] == -99,
+    df['CYST_NODESEVAL'] == 0,
+    df['CYST_NODESEVAL'] > 0
+]
+choices = ["Unknown", "No", "Yes"]
+df['NODE_DISSECT'] = np.select(conditions, choices, default="Missing")
+
+### Filter for male and female sex
+
+df = df[df['SEX'].isin(["male", "female"])]
+
+### Create BMI variable
+
+df['HEIGHT_m'] = df['HEIGHT'] * 0.0254        # Convert HEIGHT to meters
+df['WEIGHT_kg'] = df['WEIGHT'] * 0.453592       # Convert WEIGHT to kilograms
+df['BMI'] = df['WEIGHT_kg'] / (df['HEIGHT_m'] ** 2)  # Calculate BMI
+
+### Manipulate Race Variable
+conditions = [
+    df['RACE_NEW'] == "White",
+    df['RACE_NEW'] == "Black or African American",
+    df['RACE_NEW'].isin(["American Indian or Alaska Native", "Asian",
+                         "Native Hawaiian or Other Pacific Islander",
+                         "Native Hawaiian or Pacific Islander",
+                         "Some Other Race", "White,Asian"]),
+    df['RACE_NEW'].isin(["Unknown/Not Reported", "T1", "Tis", "Ta", "T2", "pT2a", "pT2b"])
+]
+choices = [
+    "White",
+    "Black or African American",
+    "Other",
+    "Unknown"
+]
+df['RACE_NEW'] = np.select(conditions, choices, default=df['RACE_NEW'])
+
+### Create variable for 'Type of Urinary Diversion'
+
+conditions = [
+    df['CPT'].isin([51595, 51590]),
+    df['CPT'] == 51596,
+    df['CPT'] == 51597,
+    df['CPT'].isin([51570, 51575]),
+    df['CPT'].isin([51580, 51585])
+]
+choices = [
+    "Ileal or sigmoid conduit",
+    "Continent diversion",
+    "Pelvic exenteration, diversion unspecifed",
+    "Cystectomy, diversion unspecified",
+    "Other"
+]
+df['UrinDiv'] = np.select(conditions, choices, default="Missing")
+
+### Create variable for 30-day mortality
+conditions = [
+    df['YRDEATH'] == -99,
+    df['YRDEATH'].isin([2019, 2020, 2021])
+]
+choices = ["No", "Yes"]
+df['THIRTYDAYMORT'] = np.select(conditions, choices, default="Missing")
+
+### Manipulate discharge destination variable
+
+df['DISCHDEST'] = df['DISCHDEST'].fillna("Unknown")
+
+conditions = [
+    df['DISCHDEST'].isin(["Facility Which was Home", "Home", "Home/Permanent Residence"]),
+    df['DISCHDEST'].isin(["Acute Care Hospital", "Hospice", "Multi-level Senior Community",
+                           "Other Facility", "Rehab", "Separate Acute Care",
+                           "Skilled Care, Not Home", "Unskilled Facility Not Home", "Against Medical Advice (AMA)",
+                          "NULL", "nan", "Unknown", "Expired" ]),
+]
+choices = ["Home", "Non-home discharge"]
+df['DISCHDEST'] = np.select(conditions, choices, default=df['DISCHDEST'])
+
+### Change age tto numeric variable
+df['Age'] = pd.to_numeric(df['Age'], errors='coerce')
+
+### Define pathology T stage
+
+df['CYST_MALIGNANCYT'] = df['CYST_MALIGNANCYT'].fillna("Unknown")
+
+conditions = [
+    df['CYST_MALIGNANCYT'].isin(["N/A", "Tx", "Unknown"]),
+    df['CYST_MALIGNANCYT'].isin(["T0", "T1", "Tis", "Ta", "T2", "pT2a", "pT2b"]),
+    df['CYST_MALIGNANCYT'].isin(["T3", "T4", "pT3a", "T4a", "T4b", "pT3b"])
+]
+choices = ["Unknown", "Organ confined", "Locally advanced"]
+df['CYST_MALIGNANCYT'] = np.select(conditions, choices, default=df['CYST_MALIGNANCYT'])
+
+### Define pathology N stage
+
+df['CYST_MALIGNANCYN'] = df['CYST_MALIGNANCYN'].fillna("Unknown")
+
+conditions = [
+    df['CYST_MALIGNANCYN'].isin(["N/A", "Nx", "Unknown"]),
+    df['CYST_MALIGNANCYN'] == "N0",
+    df['CYST_MALIGNANCYN'].isin(["N1", "N2", "N3"])
+]
+choices = ["Unknown", "N0", "N+"]
+df['CYST_MALIGNANCYN'] = np.select(conditions, choices, default=df['CYST_MALIGNANCYN'])
+
+### Define pathology M stage
+
+df['CYST_MALIGNANCYM'] = df['CYST_MALIGNANCYM'].fillna("Unknown")
+
+conditions = [
+    df['CYST_MALIGNANCYM'].isin(["M0", "N/A", "Unknown"]),
+    df['CYST_MALIGNANCYM'].isin(["M1", "M1a", "M1b"])
+]
+choices = ["No documented distant metastases", "Documented distant metastases"]
+df['CYST_MALIGNANCYM'] = np.select(conditions, choices, default=df['CYST_MALIGNANCYM'])
+
+### Ensure no patient with postoperative renal failure was on dialysis preoperatively
+count_acute_renal_dialysis = df[(df['OPRENAFL'] == "Acute Renal Failure") & (df['DIALYSIS'] == "Yes")].shape[0]
+print("Acute renal dialysis cases:", count_acute_renal_dialysis)
+
+conditions = [(df['OPRENAFL'] == "Acute Renal Failure") & (df['DIALYSIS'] == "Yes")]
+choices = ["No Complication"]
+df['OPRENAFL'] = np.select(conditions, choices, default=df['OPRENAFL'])
+
+
+### Define textbook outcome variable
+condition_to_yes = (
+    (df['OPRENAFL'] == "No Complication") &
+    (df['FAILWEAN'] == "No Complication") &
+    (df['REINTUB'] == "No Complication") &
+    (df['DEHIS'] == "No Complication") &
+    (df['CDARREST'] == "No Complication") &
+    (df['OTHBLEED'] == "No Complication") &
+    (df['OTHDVT'] == "No Complication") &
+    (df['PULEMBOL'] == "No Complication") &
+    (df['OTHSYSEP'] == "No Complication") &
+    (df['OTHSESHOCK'] == "No Complication") &
+    (df['CNSCVA'] == "No Complication") &
+    (df['CDMI'] == "No Complication") &
+    (df['THIRTYDAYMORT'] == "No") &
+    (df['RETURNOR'] == "No") &
+    (df['STILLINHOSP'] == "No") &
+    (df['CYST_ANASTLEAK'] == "No definitive diagnosis of leak/leak related abscess") &
+    (df['CYST_LYMPH_OTHFLUID'].isin(["No", "Yes, no treatment intervention documented"])) &
+    (df['CYST_PROPOSTOP'] == "No") &
+    (df['CYST_RECTINJ'] == "No definitive diagnosis") &
+    (df['CYST_URETOBS'].isin(["No", "Yes, unchanged from preop"])) &
+    (df['CYST_URETFISTULA'] == "No")
+)
+df['TO'] = np.where(condition_to_yes, "Yes", "No")
+
+### Create mfi5 score, and groups scores based on 0, 1 or +2
+def calculate_mfi5_score(row):
+    score = 0
+    if row["HXCHF"] == "Yes":
+        score += 1
+    if row["HXCOPD"] == "Yes":
+        score += 1
+    if row["HYPERMED"] == "Yes":
+        score += 1
+    if row["DIABETES"] in ["INSULIN", "NON-INSULIN"]:
+        score += 1
+    if row["FNSTATUS2"] in ["Partially Dependent", "Totally Dependent"]:
+        score += 1
+
+    # Group the scores:
+    if score == 0:
+        return "0"
+    elif score == 1:
+        return "1"
+    else:
+        return "2+"
+
+#Function applied to dataset
+df['mfi5'] = df.apply(calculate_mfi5_score, axis=1)
+
+
+# Create variable for surgical approach technique
+
+def map_cyst_approach(val):
+    if val in ["Robotic w/ open assist (i.e. hand assist)",
+               "Other Minimally Invasive (MIS) approach w/ open assist",
+               "Laparoscopic w/ open assist",
+               "Hybrid w/ open assist",
+               "Endoscopic w/ open assist",
+               "Hybrid"]:
+        return "Hybrid Approach"
+    elif val in ["Robotic", "Laparoscopic"]:
+        return "MIS Approach"
+    elif val == "Open (planned)":
+        return "Open"
+    elif val in ["Robotic w/ unplanned conversion to open",
+                 "Laparoscopic w/ unplanned conversion to open",
+                 "Hybrid w/ unplanned conversion to open"]:
+        return "Converted to Open"
+    elif val in ["Other", "NULL"]:
+        return "Other/Unknown"
+    else:
+        return val
+
+df['CYST_APPROACH_NEW'] = df['CYST_APPROACH'].apply(map_cyst_approach)
+
+# Replace -99 with NaN only in continuous variables to ensure calculation of mean/median scores is not imbalanced
+continuous_vars = ["Age", "BMI", "OPTIME", "TOTHLOS", "CYST_NODESEVAL", "PRSODM", "PRBUN", "PRCREAT", "PRALBUM", "PRBILI", "PRSGOT", "PRALKPH",
+                   "PRWBC", "PRHCT", "PRPLATE", "PRPTT", "PRINR"]
+
+
+df[continuous_vars] = df[continuous_vars].replace(-99, np.nan)
+
+# Save updated dataset
+df.to_csv("df1.txt", sep="\t", index=False)
