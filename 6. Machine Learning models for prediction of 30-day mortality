@@ -553,3 +553,60 @@ print("\nCatBoost Best Parameters:", cb_params)
     print("Accuracy:", cb_accuracy_str)
     print("AUROC:", cb_auroc_str)
     print("Brier Score:", cb_brier_str)
+
+
+### Compile results into table to compare ML model performance
+
+cb_results = [
+    cb_sensitivity_str,
+    cb_specificity_str,
+    cb_auprc_str,
+    cb_accuracy_str,
+    cb_auroc_str,
+    cb_brier_str
+]
+
+xgb_results = [
+    xgb_sensitivity_str,
+    xgb_specificity_str,
+    xgb_auprc_str,
+    xgb_accuracy_str,
+    xgb_auroc_str,
+    xgb_brier_str
+]
+
+lgb_results = [
+    lgb_sensitivity_str,
+    lgb_specificity_str,
+    lgb_auprc_str,
+    lgb_accuracy_str,
+    lgb_auroc_str,
+    lgb_brier_str
+]
+
+rf_results = [
+    rf_sensitivity_str,
+    rf_specificity_str,
+    rf_auprc_str,
+    rf_accuracy_str,
+    rf_auroc_str,
+    rf_brier_str
+]
+
+results = {
+    'CatBoost': cb_results,
+    'XGBoost': xgb_results,
+    'LightGBM': lgb_results,
+    'Random Forest': rf_results,
+}
+
+results_df = pd.DataFrame(results).T
+results_df.columns = [
+    'Sensitivity (95% CI)',
+    'Specificity (95% CI)',
+    'AUPRC (95% CI)',
+    'Accuracy (95% CI)',
+    'AUROC (95% CI)',
+    'Brier Score (95% CI)'
+]
+results_df.to_csv('30dmodelresults.csv', index=True)
