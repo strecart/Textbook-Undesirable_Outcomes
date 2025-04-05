@@ -1,0 +1,92 @@
+### 3. Create TableOne for NSQIP Data
+
+import pandas as pd
+from tableone import TableOne
+
+df1 = pd.read_csv("df1.txt", sep="\t", encoding="latin1")
+
+### Select columns to define new dataframe for Table one
+selected_columns = [
+    "Age", "BMI", "PRSODM", "PRBUN", "PRCREAT", "PRALBUM", "PRBILI",
+    "PRSGOT", "PRWBC", "PRHCT", "PRPLATE", "PRPTT", "PRINR", "SEX",
+    "RACE_NEW", "ETHNICITY_HISPANIC", "CYST_APPROACH_NEW", "mfi5", "UrinDiv", "ELECTSURG", "SMOKE",
+    "ASACLAS", "DIALYSIS", "DISCANCR", "STEROID", "TRANSFUS", "NODE_DISSECT",
+    "CYST_CHEMO", "CYST_PRIOR_PRADIO", "CYST_PRIORPEL", "TO", "STILLINHOSP", "THIRTYDAYMORT", "READMISSION1", "DISCHDEST"
+]
+
+df1_table1 = df1[selected_columns]
+
+### Select variables for inclusion into table one
+variables = [
+    "Age", "SEX", "RACE_NEW", "ETHNICITY_HISPANIC", "BMI",
+    "CYST_APPROACH_NEW","UrinDiv", "ELECTSURG","NODE_DISSECT", "CYST_CHEMO", "CYST_PRIOR_PRADIO", "CYST_PRIORPEL",
+    "ASACLAS","mfi5", "SMOKE", "DIALYSIS", "DISCANCR", "STEROID", "TRANSFUS",
+    "PRSODM", "PRBUN", "PRCREAT", "PRALBUM", "PRBILI",
+    "PRSGOT", "PRWBC", "PRHCT", "PRPLATE", "PRPTT", "PRINR"
+
+
+]
+
+### Highlight categorical variables
+cat_variables = [
+    "SEX", "RACE_NEW", "ETHNICITY_HISPANIC", "CYST_APPROACH_NEW", "mfi5", "UrinDiv", "ELECTSURG", "SMOKE",
+    "ASACLAS", "DIALYSIS", "DISCANCR", "STEROID", "TRANSFUS", "NODE_DISSECT",
+    "CYST_CHEMO", "CYST_PRIOR_PRADIO", "CYST_PRIORPEL"
+]
+
+### Create a TableOne, and stratify by each outcome
+table_TO = TableOne(
+    data=df1_table1,
+    columns=variables,
+    categorical=cat_variables,
+    groupby="TO",
+    nonnormal=["Age", "BMI", "OPTIME", "TOTHLOS", "CYST_NODESEVAL"],
+    pval=True, smd=True
+)
+df_TO = table_TO.tableone  # Convert TableOne to a DataFrame
+
+table_30DM = TableOne(
+    data=df1_table1,
+    columns=variables,
+    categorical=cat_variables,
+    groupby="THIRTYDAYMORT",
+    nonnormal=["Age", "BMI", "OPTIME", "TOTHLOS", "CYST_NODESEVAL"],
+    pval=True, smd=True
+)
+df_30DM = table_30DM.tableone
+
+table_STILL = TableOne(
+    data=df1_table1,
+    columns=variables,
+    categorical=cat_variables,
+    groupby="STILLINHOSP",
+    nonnormal=["Age", "BMI", "OPTIME", "TOTHLOS", "CYST_NODESEVAL"],
+    pval=True, smd=True
+)
+df_STILL = table_STILL.tableone
+
+table_READM = TableOne(
+    data=df1_table1,
+    columns=variables,
+    categorical=cat_variables,
+    groupby="READMISSION1",
+    nonnormal=["Age", "BMI", "OPTIME", "TOTHLOS", "CYST_NODESEVAL"],
+    pval=True, smd=True
+)
+df_READM = table_READM.tableone
+
+# Create TableOne for DISCHDEST
+table_DISCHDEST = TableOne(
+    data=df1_table1,
+    columns=variables,
+    categorical=cat_variables,
+    groupby="DISCHDEST",
+    nonnormal=["Age", "BMI", "OPTIME", "TOTHLOS", "CYST_NODESEVAL"],
+    pval=True, smd=True
+)
+df_DISCHDEST = table_DISCHDEST.tableone
+
+# Merge tables side by side to create TableOne
+combined = pd.concat([df_TO, df_30DM, df_STILL, df_READM, df_DISCHDEST], axis=1)
+
+combined.to_csv("combined_tableone.csv")
