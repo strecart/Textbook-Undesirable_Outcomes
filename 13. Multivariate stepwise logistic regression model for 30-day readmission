@@ -1,0 +1,187 @@
+### 13. Multivariate stepwise logistic regression model for 30-day readmission
+
+import pandas as pd
+import numpy as np
+import statsmodels.formula.api as smf
+import statsmodels.api as sm
+from sklearn.metrics import roc_auc_score, roc_curve
+from sklearn.model_selection import train_test_split
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import pickle
+
+# Bootstrapping function
+def bootstrap_auroc(y_true, y_scores, n_bootstraps=1000, alpha=0.05, random_state=42):
+    rng = np.random.RandomState(random_state)
+    bootstrapped_scores = []
+    n_samples = len(y_true)
+    for i in range(n_bootstraps):
+        indices = rng.choice(np.arange(n_samples), size=n_samples, replace=True)
+        if len(np.unique(y_true[indices])) < 2:
+            continue
+        score = roc_auc_score(y_true[indices], y_scores[indices])
+        bootstrapped_scores.append(score)
+    bootstrapped_scores = np.array(bootstrapped_scores)
+    lower_bound = np.percentile(bootstrapped_scores, 100 * alpha / 2)
+    upper_bound = np.percentile(bootstrapped_scores, 100 * (1 - alpha / 2))
+    return lower_bound, upper_bound
+
+# Load data and select variables
+df4 = pd.read_csv('encodeddataprocessedALL.csv')
+
+# Create binary outcome
+df4['READMISSION1_bin'] = df4['READMISSION1'].map({'No': 0, 'Yes': 1})
+
+continuous_vars = ["Age", "BMI", "PRSODM", "PRBUN", "PRCREAT", "PRWBC", "PRHCT", "PRPLATE"]
+categorical_vars = ["SEX", "RACE_NEW", "CYST_APPROACH_NEW", "mfi5", "UrinDiv", "ETHNICITY_HISPANIC",
+                    "SMOKE", "ASACLAS", "DIALYSIS", "DISCANCR", "STEROID", "TRANSFUS", "NODE_DISSECT",
+                    "CYST_CHEMO", "CYST_PRIOR_PRADIO", "CYST_PRIORPEL"]
+candidate_vars = continuous_vars + categorical_vars
+
+df4 = df4[candidate_vars + ["READMISSION1_bin"]]
+
+# Split data into training, validation, testing sets
+train_data, temp_data = train_test_split(df4, test_size=0.4, random_state=42)
+val_data, test_data = train_test_split(temp_data, test_size=0.5, random_state=42)
+
+print("Training set shape:", train_data.shape)
+print("Validation set shape:", val_data.shape)
+print("Testing set shape:", test_data.shape)
+
+# Define AIC functions
+def fit_model(formula, data):
+    model = smf.logit(formula=formula, data=data).fit(disp=0)
+    return model
+
+def make_term(term):
+    if term in categorical_vars:
+        return f"C({term})"
+    else:
+        return term
+
+def stepwise_selection(data, response, candidate_vars, verbose=True):
+    included = []
+    best_formula = f"{response} ~ 1"
+    best_model = fit_model(best_formula, data)
+    best_aic = best_model.aic
+    if verbose:
+        print(f"Start: AIC = {best_aic:.4f}")
+    improved = True
+    while improved:
+        improved = False
+        # ----- Forward step -----
+        forward_aic = {}
+        for term in candidate_vars:
+            if term not in included:
+                terms = [make_term(t) for t in included + [term]]
+                formula = f"{response} ~ " + " + ".join(terms)
+                try:
+                    model = fit_model(formula, data)
+                    forward_aic[term] = model.aic
+                except np.linalg.LinAlgError as e:
+                    if verbose:
+                        print(f"Skipping {term} due to singular matrix error: {e}")
+                    continue
+        if forward_aic:
+            best_forward_term = min(forward_aic, key=forward_aic.get)
+            best_forward_aic = forward_aic[best_forward_term]
+            if best_forward_aic < best_aic:
+                included.append(best_forward_term)
+                best_aic = best_forward_aic
+                terms = [make_term(t) for t in included]
+                best_formula = f"{response} ~ " + " + ".join(terms)
+                best_model = fit_model(best_formula, data)
+                improved = True
+                if verbose:
+                    print(f"Add {best_forward_term:30} New AIC: {best_aic:.4f}")
+        # ----- Backward step -----
+        if included:
+            backward_aic = {}
+            for term in included:
+                temp_terms = included.copy()
+                temp_terms.remove(term)
+                if temp_terms:
+                    terms = [make_term(t) for t in temp_terms]
+                    formula = f"{response} ~ " + " + ".join(terms)
+                else:
+                    formula = f"{response} ~ 1"
+                try:
+                    model = fit_model(formula, data)
+                    backward_aic[term] = model.aic
+                except np.linalg.LinAlgError as e:
+                    backward_aic[term] = float('inf')
+                    if verbose:
+                        print(f"Skipping removal of {term} due to singular matrix error: {e}")
+            if backward_aic:
+                worst_term = min(backward_aic, key=backward_aic.get)
+                worst_aic = backward_aic[worst_term]
+                current_terms = [make_term(t) for t in included]
+                current_formula = f"{response} ~ " + " + ".join(current_terms)
+                current_model = fit_model(current_formula, data)
+                current_aic = current_model.aic
+                if worst_aic < current_aic:
+                    included.remove(worst_term)
+                    best_aic = worst_aic
+                    if included:
+                        terms = [make_term(t) for t in included]
+                        best_formula = f"{response} ~ " + " + ".join(terms)
+                    else:
+                        best_formula = f"{response} ~ 1"
+                    best_model = fit_model(best_formula, data)
+                    improved = True
+                    if verbose:
+                        print(f"Drop {worst_term:30} New AIC: {best_aic:.4f}")
+        if not improved:
+            break
+    return best_model, best_formula
+
+# Run selection and fit model on training data
+final_modelreadmit, final_formula = stepwise_selection(train_data, "READMISSION1_bin", candidate_vars, verbose=True)
+print("\nFinal Model Formula:")
+print(final_formula)
+print("\nFinal Model Summary:")
+print(final_modelreadmit.summary())
+
+# Save the final model
+with open("final_modelreadmit.pkl", "wb") as f:
+    pickle.dump(final_modelreadmit, f)
+
+# Evaluate model on test data
+predicted_probabilities_test = final_modelextlos.predict(test_data)
+test_auroc = roc_auc_score(test_data["READMISSION1_bin"], predicted_probabilities_test)
+print(f"\nTest AUROC: {test_auroc:.3f}")
+
+y_true = test_data["READMISSION1_bin"].values
+y_scores = np.array(predicted_probabilities_test)
+ci_lower, ci_upper = bootstrap_auroc(y_true, y_scores)
+print(f"Test AUROC 95% CI: {ci_lower:.3f} - {ci_upper:.3f}")
+
+# Plot ROC curve on testing data
+fpr, tpr, _ = roc_curve(test_data["READMISSION1_bin"], predicted_probabilities_test)
+plt.figure(figsize=(8, 8))
+plt.plot(fpr, tpr, label=f"Test ROC (AUROC = {test_auroc:.3f})", linewidth=3)
+plt.plot([0, 1], [0, 1], linestyle='--', linewidth=2)
+plt.title("ROC Curve on Testing Data", fontsize=16)
+plt.xlabel("False Positive Rate", fontsize=14)
+plt.ylabel("True Positive Rate", fontsize=14)
+plt.legend(loc='lower right')
+plt.savefig("readmit_curve.png")
+plt.close()
+
+# Extract best performing and significant features
+params = final_modelreadmit.params
+conf_int = final_modelreadmit.conf_int()
+pvals = final_modelreadmit.pvalues
+
+odds_ratios = np.exp(params)
+conf_odds = np.exp(conf_int)
+
+or_summary = pd.concat([odds_ratios, conf_odds, pvals], axis=1)
+or_summary.columns = ['Odds Ratio', '2.5%', '97.5%', 'p-value']
+
+or_summary_sig = or_summary[or_summary['p-value'] < 0.05].copy()
+or_summary_sig[['Odds Ratio', '2.5%', '97.5%']] = or_summary_sig[['Odds Ratio', '2.5%', '97.5%']].round(2)
+or_summary_sig['p-value'] = or_summary_sig['p-value'].round(4)
+
+or_summary_sig.to_csv("readmitnewoddsv1_ratio_summary_sig.csv")
