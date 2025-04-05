@@ -1,0 +1,191 @@
+### 18. Gradio file for Textbook and Undesirable outcome prediction for use on Hugging Face.
+
+import pandas as pd
+import statsmodels.api as sm
+import gradio as gr
+import pickle
+
+#Variables used in training sets
+continuous_vars = ["Age", "BMI", "PRSODM", "PRBUN", "PRCREAT", "PRWBC", "PRHCT", "PRPLATE"]
+categorical_vars = ["SEX", "RACE_NEW", "CYST_APPROACH_NEW", "mfi5", "UrinDiv", "ETHNICITY_HISPANIC",
+                    "SMOKE", "ASACLAS", "DIALYSIS", "DISCANCR", "STEROID", "TRANSFUS", "NODE_DISSECT",
+                    "CYST_CHEMO", "CYST_PRIOR_PRADIO", "CYST_PRIORPEL"]
+
+# Specify order of predictors on interface
+ordered_predictors = ["Age", "BMI"] + categorical_vars + ["PRHCT", "PRWBC", "PRPLATE", "PRSODM", "PRBUN", "PRCREAT"]
+
+# Mapping dictionaries
+manual_mappings = {
+    "SEX": {"male": 1, "female": 0},
+    "RACE_NEW": {"White": 0, "Black or African American": 1, "Unknown": 3, "Other": 4},
+    "ETHNICITY_HISPANIC": {"No": 0, "Yes": 1, "Unknown": 2},
+    "SMOKE": {"No": 0, "Yes": 1},
+    "ASACLAS": {"1-No Disturb": 0, "2-Mild Disturb": 1, "3-Severe Disturb": 2, "4-Life Threat": 3, "None assigned": 5, "5-Moribund": 4},
+    "DIALYSIS": {"No": 0, "Yes": 1},
+    "DISCANCR": {"No": 0, "Yes": 1},
+    "STEROID": {"No": 0, "Yes": 1},
+    "TRANSFUS": {"No": 0, "Yes": 1},
+    "NODE_DISSECT": {"No": 0, "Yes": 1, "Unknown": 2},
+    "CYST_CHEMO": {"No": 0, "Yes": 1},
+    "CYST_PRIOR_PRADIO": {"No": 0, "Yes": 1},
+    "CYST_PRIORPEL": {"No": 0, "Yes": 1},
+    "UrinDiv": {"Continent diversion": 0, "Ileal or sigmoid conduit": 1, "Pelvic exenteration, diversion unspecifed": 2},
+    "CYST_APPROACH_NEW": {"Open": 0, "MIS Approach": 1, "Hybrid Approach": 2, "Converted to Open": 3, "Other/Unknown": 4},
+    # For mfi5, adjust according to expected levels (here we use 0,1,2,3)
+    "mfi5": {"0": 0, "1": 1, "≥2": 2}
+}
+
+# Create custom labels for interface
+custom_labels = {
+    "SEX": "Sex",
+    "RACE_NEW": "Race",
+    "CYST_APPROACH_NEW": "Will the SURGICAL APPROACH be open, minimally invasive, or hybrid (e.g., with extracorporeal diversion)?",
+    "mfi5": "mfi5 score (assign one point each for CHF, COPD, hypertension, diabetes, and non-independent functional status; 0,1 or ≥2)",
+    "UrinDiv": "URINARY DIVERSION Type",
+    "DIALYSIS": "Is patient on DIALYSIS?",
+    "DISCANCR": "Does the patient have DISSEMINATED CANCER?",
+    "STEROID": "Does the patient take a STEROID/IMMUNOSUPPRESSANT?",
+    "TRANSFUS": "Has the patient required an RBC transfusion within 72 hrs prior to surgery?",
+    "CYST_CHEMO": "Has the patient had NEOADJUVANT CHEMOTHERAPY?",
+    "CYST_PRIOR_PRADIO": "Has the patient had prior PELVIC RADIOTHERAPY?",
+    "CYST_PRIORPEL": "Has the patient had prior PELVIC SURGERY?",
+    "NODE_DISSECT": "Was lymph node dissection performed?",
+    "SMOKE": "Does the patient SMOKE?",
+    "ETHNICITY_HISPANIC": "Is the patient of Hispanic ethnicity?",
+    "ASACLAS": "ASACLAS classification (1-No Disturb, 2-Mild Disturb, 3-Severe Disturb, 4-Life Threat, None assigned, 5-Moribund)",
+    "PRSODM": "Preoperative Serum Sodium",
+    "PRBUN": "Preoperative BUN",
+    "PRCREAT": "Preoperative serum creatinine",
+    "PRWBC": "Preoperative WBC",
+    "PRHCT": "Preoperative hematocrit",
+    "PRPLATE": "Preoperative platelet count",
+    "Age": "Age",
+    "BMI": "Body Mass Index"
+}
+
+# Customize labels and inputs for predictors
+inputs = []
+for predictor in ordered_predictors:
+    label = custom_labels.get(predictor, predictor)
+    if predictor in continuous_vars:
+        if predictor == "Age":
+            inputs.append(gr.Number(label=label, value=89, minimum=22.0, maximum=89.0))
+        elif predictor == "BMI":
+            inputs.append(gr.Number(label=label, value=25, minimum=15, maximum=60))
+        elif predictor == "PRSODM":
+            inputs.append(gr.Number(label=label, value=140, minimum=116.0, maximum=160.0))
+        elif predictor == "PRBUN":
+            inputs.append(gr.Number(label=label, value=13, minimum=2.0, maximum=131.24))
+        elif predictor == "PRCREAT":
+            inputs.append(gr.Number(label=label, value=150, minimum=19, maximum=1300))
+        elif predictor == "PRWBC":
+            inputs.append(gr.Number(label=label, value=7, minimum=0.6, maximum=48.0))
+        elif predictor == "PRHCT":
+            inputs.append(gr.Number(label=label, value=40, minimum=8.3, maximum=54.6))
+        elif predictor == "PRPLATE":
+            inputs.append(gr.Number(label=label, value=250, minimum=26.4, maximum=924.0))
+        else:
+            inputs.append(gr.Number(label=label))
+    elif predictor in categorical_vars:
+        if predictor == "SEX":
+            options = ["male", "female"]
+        elif predictor == "RACE_NEW":
+            options = ["Black or African American", "Other", "Unknown", "White"]
+        elif predictor == "CYST_APPROACH_NEW":
+            options = ["Hybrid Approach", "MIS Approach", "Open", "Other/Unknown"]
+        elif predictor == "mfi5":
+            options = ["0", "1", "≥2"]
+        elif predictor == "UrinDiv":
+            options = ["Continent diversion", "Ileal or sigmoid conduit", "Pelvic exenteration, diversion unspecifed"]
+        elif predictor in ["DIALYSIS", "DISCANCR", "STEROID", "TRANSFUS", "CYST_CHEMO", "CYST_PRIOR_PRADIO", "CYST_PRIORPEL", "SMOKE", "ETHNICITY_HISPANIC", "ASACLAS"]:
+            if predictor == "ASACLAS":
+                options = ["1-No Disturb", "2-Mild Disturb", "3-Severe Disturb", "4-Life Threat", "None assigned", "5-Moribund"]
+            else:
+                options = ["Yes", "No"]
+        elif predictor == "NODE_DISSECT":
+            options = ["Yes", "No", "Unknown"]
+        else:
+            options = []
+        if options:
+            if predictor in ["DIALYSIS", "DISCANCR", "STEROID", "TRANSFUS", "CYST_CHEMO", "CYST_PRIOR_PRADIO", "CYST_PRIORPEL", "NODE_DISSECT", "SMOKE", "ETHNICITY_HISPANIC"]:
+                inputs.append(gr.Dropdown(choices=options, label=label, value="No"))
+            elif predictor == "ASACLAS":
+                inputs.append(gr.Dropdown(choices=options, label=label, value="2-Mild Disturb"))
+            else:
+                inputs.append(gr.Dropdown(choices=options, label=label))
+        else:
+            inputs.append(gr.Textbox(label=label))
+    else:
+        inputs.append(gr.Textbox(label=label))
+
+def format_value(value):
+    if value < 1:
+        return "<1"
+    return value
+
+def predict_outcomes(*args):
+    # Map positional inputs to predictor names
+    input_data = dict(zip(ordered_predictors, args))
+    print("Before mapping:", input_data)  # Debug print
+
+    # Apply manual encoding for categorical variables
+    for key, mapping in manual_mappings.items():
+        if key in input_data:
+            val = input_data[key]
+            if isinstance(val, str) and val in mapping:
+                input_data[key] = mapping[val]
+            else:
+                try:
+                    input_data[key] = int(val)
+                except Exception:
+                    input_data[key] = val
+    print("After mapping:", input_data)  # Debug print
+
+    # Create a DataFrame from the input data and add constant term
+    input_df = pd.DataFrame([input_data])
+    input_df = sm.add_constant(input_df, has_constant='add')
+
+    # Load each model and make appropriate prediction based on inputs
+    with open("final_modelTO.pkl", "rb") as f:
+        modelTO = pickle.load(f)
+    text_outcome = round(float(modelTO.predict(input_df).iloc[0]) * 100, 2)
+    text_outcome = format_value(text_outcome)
+
+    with open("final_model30daymort.pkl", "rb") as f:
+        model30 = pickle.load(f)
+    mort30 = round(float(model30.predict(input_df).iloc[0]) * 100, 2)
+    mort30 = format_value(mort30)
+
+    with open("final_modelextlos.pkl", "rb") as f:
+        model_extlos = pickle.load(f)
+    extlos = round(float(model_extlos.predict(input_df).iloc[0]) * 100, 2)
+    extlos = format_value(extlos)
+
+    with open("final_modelreadmit.pkl", "rb") as f:
+        model_readmit = pickle.load(f)
+    readmit = round(float(model_readmit.predict(input_df).iloc[0]) * 100, 2)
+    readmit = format_value(readmit)
+
+    with open("final_modeldischdest.pkl", "rb") as f:
+        model_dischdest = pickle.load(f)
+    dischdest = round(float(model_dischdest.predict(input_df).iloc[0]) * 100, 2)
+    dischdest = format_value(dischdest)
+
+    return text_outcome, mort30, extlos, readmit, dischdest
+
+### Gradio interface
+iface = gr.Interface(
+    fn=predict_outcomes,
+    inputs=inputs,
+    outputs=[
+        gr.Textbox(label="Predicted Textbook Outcome Risk (%)"),
+        gr.Textbox(label="Predicted 30-Day Mortality Risk (%)"),
+        gr.Textbox(label="Predicted Prolonged LOS Risk (%)"),
+        gr.Textbox(label="Predicted Readmission Risk (%)"),
+        gr.Textbox(label="Predicted Non-home Discharge Risk (%)")
+    ],
+    title="Comprehensive Risk Calculator",
+    description="Enter patient data to get the predicted risks for textbook outcomes, 30-day mortality, prolonged LOS, readmission, and non-home discharge."
+)
+
+iface.launch()
