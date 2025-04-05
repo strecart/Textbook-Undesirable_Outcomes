@@ -1,0 +1,37 @@
+### Predicting textbook and undesirable outcomes
+### 1. Data importing and merging of datasets
+
+#### Import all datasets
+
+import pandas as pd
+
+df_acs20 = pd.read_csv("acs_nsqip_puf20.txt", sep="\t", encoding="latin1")
+
+df_acs19 = pd.read_csv("acs_nsqip_puf19.txt", sep="\t", encoding="latin1")
+df_acs21 = pd.read_csv("acs_nsqip_puf21.txt", sep="\t", encoding="latin1")
+df_puf19 = pd.read_csv("puf_tar_cyst_2019.txt", sep="\t", encoding="latin1")
+df_puf20 = pd.read_csv("puf_tar_cyst_2020.txt", sep="\t", encoding="latin1")
+df_puf21 = pd.read_csv("puf_tar_cyst_2021.txt", sep="\t", encoding="latin1")
+
+### rename columns as appropriate since minor variation between datasets
+df_acs19.rename(columns={"AGE": "Age"}, inplace=True)
+df_acs19.rename(columns={"OPERYR": "OperYR"}, inplace=True)
+df_acs20.rename(columns={"CaseID": "CASEID"}, inplace=True)
+df_acs21.rename(columns={"CaseID": "CASEID"}, inplace=True)
+
+### Filter ACS datasets by CPT code
+cpt_codes = [51570, 51575, 51580, 51585, 51590, 51595, 51596, 51597]
+
+df_acs20_filtered = df_acs20[df_acs20["CPT"].isin(cpt_codes)]
+df_acs19_filtered = df_acs19[df_acs19["CPT"].isin(cpt_codes)]
+df_acs21_filtered = df_acs21[df_acs21["CPT"].isin(cpt_codes)]
+
+### Merge datasets by year, matching by CASEID
+df_merged_19 = pd.merge(df_acs19_filtered, df_puf19, on='CASEID', how='inner')
+df_merged_20 = pd.merge(df_acs20_filtered, df_puf20, on='CASEID', how='inner')
+df_merged_21 = pd.merge(df_acs21_filtered, df_puf21, on='CASEID', how='inner')
+
+### Combine merged datasets
+df_merged_all = pd.concat([df_merged_19, df_merged_20, df_merged_21], ignore_index=True)
+
+df_merged_all.to_csv("df.txt", sep="\t", index=False)
