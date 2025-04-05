@@ -1,0 +1,153 @@
+### 4. Preprocessing NSQIP data- manually encoding and imputing missing data
+
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import LabelEncoder
+from sklearn.experimental import enable_iterative_imputer  # Enable IterativeImputer
+from sklearn.impute import IterativeImputer
+
+### Select variables and change multiply Cr by 100 so can remove decimal places
+data = pd.read_csv("df1.txt", sep="\t", encoding="latin1")
+data.columns = data.columns.str.strip()
+
+variables = [
+    "Age", "PRSODM", "PRBUN", "PRCREAT", "PRWBC", "PRHCT", "PRPLATE", "SEX", "RACE_NEW", "BMI",
+    "ETHNICITY_HISPANIC", "CYST_APPROACH_NEW", "mfi5", "UrinDiv", "SMOKE",
+    "ASACLAS", "DIALYSIS", "DISCANCR", "STEROID", "TRANSFUS", "NODE_DISSECT",
+    "CYST_CHEMO", "CYST_PRIOR_PRADIO", "CYST_PRIORPEL", "TO", "STILLINHOSP", "THIRTYDAYMORT", "READMISSION1",
+    "DISCHDEST"
+]
+data = data[variables]
+
+data['PRCREAT'] = data['PRCREAT'] * 100
+
+print("Columns:", data.columns.tolist())
+
+### Manually encode categorical variables
+
+data.loc[data['SEX'] == 'female', 'SEX'] = 0
+data.loc[data['SEX'] == 'male', 'SEX'] = 1
+
+data.loc[data['RACE_NEW'] == 'White', 'RACE_NEW'] = 0
+data.loc[data['RACE_NEW'] == 'Black or African American', 'RACE_NEW'] = 1
+data.loc[data['RACE_NEW'] == 'Unknown', 'RACE_NEW'] = 3
+data.loc[data['RACE_NEW'] == 'Other', 'RACE_NEW'] = 4
+
+data.loc[data['ETHNICITY_HISPANIC'] == 'No', 'ETHNICITY_HISPANIC'] = 0
+data.loc[data['ETHNICITY_HISPANIC'] == 'Yes', 'ETHNICITY_HISPANIC'] = 1
+data.loc[data['ETHNICITY_HISPANIC'] == 'Unknown', 'ETHNICITY_HISPANIC'] = 2
+
+data.loc[data['SMOKE'] == 'No', 'SMOKE'] = 0
+data.loc[data['SMOKE'] == 'Yes', 'SMOKE'] = 1
+
+data.loc[data['ASACLAS'] == '1-No Disturb', 'ASACLAS'] = 0
+data.loc[data['ASACLAS'] == '2-Mild Disturb', 'ASACLAS'] = 1
+data.loc[data['ASACLAS'] == '3-Severe Disturb', 'ASACLAS'] = 2
+data.loc[data['ASACLAS'] == '4-Life Threat', 'ASACLAS'] = 3
+data.loc[data['ASACLAS'] == 'None assigned', 'ASACLAS'] = 5
+data.loc[data['ASACLAS'] == '5-Moribund', 'ASACLAS'] = 4
+
+data.loc[data['DIALYSIS'] == 'No', 'DIALYSIS'] = 0
+data.loc[data['DIALYSIS'] == 'Yes', 'DIALYSIS'] = 1
+
+data.loc[data['DISCANCR'] == 'No', 'DISCANCR'] = 0
+data.loc[data['DISCANCR'] == 'Yes', 'DISCANCR'] = 1
+
+data.loc[data['STEROID'] == 'No', 'STEROID'] = 0
+data.loc[data['STEROID'] == 'Yes', 'STEROID'] = 1
+
+data.loc[data['TRANSFUS'] == 'No', 'TRANSFUS'] = 0
+data.loc[data['TRANSFUS'] == 'Yes', 'TRANSFUS'] = 1
+
+data.loc[data['NODE_DISSECT'] == 'No', 'NODE_DISSECT'] = 0
+data.loc[data['NODE_DISSECT'] == 'Yes', 'NODE_DISSECT'] = 1
+data.loc[data['NODE_DISSECT'] == 'Unknown', 'NODE_DISSECT'] = 2
+
+data.loc[data['CYST_CHEMO'] == 'No', 'CYST_CHEMO'] = 0
+data.loc[data['CYST_CHEMO'] == 'Yes', 'CYST_CHEMO'] = 1
+
+data.loc[data['CYST_PRIOR_PRADIO'] == 'No', 'CYST_PRIOR_PRADIO'] = 0
+data.loc[data['CYST_PRIOR_PRADIO'] == 'Yes', 'CYST_PRIOR_PRADIO'] = 1
+
+data.loc[data['CYST_PRIORPEL'] == 'No', 'CYST_PRIORPEL'] = 0
+data.loc[data['CYST_PRIORPEL'] == 'Yes', 'CYST_PRIORPEL'] = 1
+
+data.loc[data['UrinDiv'] == 'Ileal or sigmoid conduit', 'UrinDiv'] = 1
+data.loc[data['UrinDiv'] == 'Continent diversion', 'UrinDiv'] = 0
+
+data.loc[data['CYST_APPROACH_NEW'] == 'Open', 'CYST_APPROACH_NEW'] = 0
+data.loc[data['CYST_APPROACH_NEW'] == 'MIS Approach', 'CYST_APPROACH_NEW'] = 1
+data.loc[data['CYST_APPROACH_NEW'] == 'Hybrid Approach', 'CYST_APPROACH_NEW'] = 2
+data.loc[data['CYST_APPROACH_NEW'] == 'Converted to Open', 'CYST_APPROACH_NEW'] = 3
+data.loc[data['CYST_APPROACH_NEW'] == 'Other/Unknown', 'CYST_APPROACH_NEW'] = 4
+
+data.loc[data['mfi5'] == '0', 'mfi5'] = 0
+data.loc[data['mfi5'] == '1', 'mfi5'] = 1
+data.loc[data['mfi5'] == '2+', 'mfi5'] = 2
+
+#Remove outcomes from pre-processing
+
+data_cols = list(data.columns)
+outcomes = ['TO', 'STILLINHOSP','THIRTYDAYMORT', 'READMISSION1', 'DISCHDEST']
+
+data_cols = [i for i in data_cols if i not in outcomes]
+
+###  Assess missing values and imputation for missing values
+
+from sklearn.preprocessing import LabelEncoder
+
+label_encoders = {}
+
+cat_cols = list(data.select_dtypes('object').columns)
+cat_cols = [i for i in cat_cols if i not in outcomes]
+
+encoded_data = data.copy()
+
+for col in cat_cols:
+    label_encoders[col] = LabelEncoder()
+    valid_mask = encoded_data[col].notna()
+    encoded_data.loc[valid_mask, col] = label_encoders[col].fit_transform(encoded_data.loc[valid_mask, col])
+
+    #Check missing values.
+
+missing_x = encoded_data[data_cols].isnull().mean().round(4).mul(100).sort_values(ascending=False)
+
+print(missing_x, '\n')
+
+missing_x = pd.DataFrame(missing_x)
+
+missing_x.columns = ['Value']
+
+missing_x = missing_x[missing_x['Value'] > 0]
+
+print('Variables with missing values: ', list(missing_x.index), '\n')
+
+print('Number of variables with missing values: ', len(list(missing_x.index)), '\n')
+
+missing_x = missing_x[missing_x['Value'] > 25]
+
+missing_x = list(missing_x.index)
+
+print('Excluded variables: ', missing_x)
+
+    #Drop columns with missing values >25%.
+
+encoded_data.drop(missing_x, axis=1, inplace=True)
+
+data_cols = [x for x in data_cols if x not in missing_x]
+
+    # Impute missing values.
+
+imputer = IterativeImputer(random_state = 31)
+encoded_data[data_cols] = imputer.fit_transform(encoded_data[data_cols])
+
+encoded_data[data_cols] = encoded_data[data_cols].round()
+
+for col in cat_cols:
+    valid_mask = encoded_data[col].notna()
+    encoded_data.loc[valid_mask, col] = label_encoders[col].inverse_transform(encoded_data.loc[valid_mask, col].astype(int))
+
+
+### Save preprocessed NSQIP data
+
+encoded_data.to_csv("encodeddataprocessedALL.csv", index=True)
